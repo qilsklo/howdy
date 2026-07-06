@@ -40,6 +40,7 @@ py_sources = [
     'rubberstamps/hotkey.py',
     'rubberstamps/nod.py',
     'snapshot.py',
+    'verification.py',
     py_paths,
 ]
 
