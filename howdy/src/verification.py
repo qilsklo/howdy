@@ -103,6 +103,20 @@ class FaceVerifier:
 				self._process.terminate()
 
 
+class BoundVerifier:
+	"""A FaceVerifier fixed to one user, the interface the authenticator expects"""
+
+	def __init__(self, user, compare_script=None):
+		self.user = user
+		self._verifier = FaceVerifier(compare_script=compare_script)
+
+	def verify(self, timeout=None):
+		return self._verifier.verify(self.user, timeout=timeout)
+
+	def cancel(self):
+		self._verifier.cancel()
+
+
 def verify_face(user, timeout=None):
 	"""Verify the face of the given user, returns a VerificationResult"""
 	return FaceVerifier().verify(user, timeout=timeout)

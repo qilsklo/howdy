@@ -27,6 +27,7 @@ py_sources = [
     'cli/set.py',
     'cli/snap.py',
     'cli/test.py',
+    'cli/webauthn.py',
     'cli.py',
     'compare.py',
     'i18n.py',
@@ -41,6 +42,11 @@ py_sources = [
     'rubberstamps/nod.py',
     'snapshot.py',
     'verification.py',
+    'webauthn/__init__.py',
+    'webauthn/authenticator.py',
+    'webauthn/keystore.py',
+    'webauthn/keystore_tpm.py',
+    'webauthn/store.py',
     py_paths,
 ]
 

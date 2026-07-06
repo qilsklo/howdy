@@ -15,7 +15,13 @@ _howdy() {
 	case "${prev}" in
 		# After the main command, show the commands
 		"howdy")
-			opts="add clear config disable list remove clear snapshot test version"
+			opts="add clear config disable list remove clear snapshot test version webauthn"
+			COMPREPLY=( $(compgen -W "${opts}" -- ${cur}) )
+			return 0
+			;;
+		# The actions of the optional webauthn feature
+		"webauthn")
+			opts="init status list remove register authenticate run"
 			COMPREPLY=( $(compgen -W "${opts}" -- ${cur}) )
 			return 0
 			;;
