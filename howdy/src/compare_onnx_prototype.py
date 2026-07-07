@@ -87,12 +87,23 @@ class InferenceEngine:
 				available = ort.get_available_providers()
 				wanted = ["MIGraphXExecutionProvider", "ROCMExecutionProvider"]
 				gpu = [] if forced == "ort-cpu" else [p for p in wanted if p in available]
+				# MIGraphX compiles GPU kernels at session creation, which
+				# takes minutes for these models; a cache dir makes every
+				# start after the first load in well under a second
+				providers = []
+				for p in gpu:
+					if p == "MIGraphXExecutionProvider":
+						cache_dir = os.path.join(DATA_DIR, "mxr-cache")
+						os.makedirs(cache_dir, exist_ok=True)
+						providers.append((p, {"migraphx_model_cache_dir": cache_dir}))
+					else:
+						providers.append(p)
+				providers.append("CPUExecutionProvider")
 				options = ort.SessionOptions()
 				options.log_severity_level = 4
 				try:
 					self.session = ort.InferenceSession(
-						model_path, sess_options=options,
-						providers=gpu + ["CPUExecutionProvider"])
+						model_path, sess_options=options, providers=providers)
 				except Exception:
 					# GPU provider failed to initialize (missing ROCm libs,
 					# unsupported gfx target, ...): retry on the CPU alone

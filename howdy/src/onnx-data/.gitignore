@@ -3,3 +3,5 @@
 enroll_*.json
 liveness_svm.xml
 pad/
+# MIGraphX compiled-kernel cache (machine/driver specific)
+mxr-cache/

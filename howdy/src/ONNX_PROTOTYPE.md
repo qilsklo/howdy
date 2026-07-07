@@ -46,6 +46,13 @@ verification pipeline intended to replace the dlib stack in `compare.py`:
    export HSA_OVERRIDE_GFX_VERSION=11.0.0
    ```
 
+   MIGraphX compiles GPU kernels at session creation, which takes minutes
+   for these models. The engine passes `migraphx_model_cache_dir`
+   (`onnx-data/mxr-cache/`) so this cost is paid once; subsequent starts
+   load the compiled programs in under a second. The cache is tied to the
+   GPU/driver combination — delete it after ROCm upgrades if inference
+   misbehaves.
+
    The engine is picked automatically (ORT GPU EP → ORT CPU → OpenCV DNN) and
    can be forced with `HOWDY_ONNX_ENGINE=ort|ort-cpu|cv-vulkan|cv-cpu`. The
    chosen backend is printed at startup.
