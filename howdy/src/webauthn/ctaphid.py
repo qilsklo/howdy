@@ -85,6 +85,10 @@ class CtapHidDevice:
 		self._worker = None
 		self._active_cid = None
 		self._cancelled = False
+		# Whether a cancelled operation should still send its response frame.
+		# True for CTAPHID_CANCEL (the host waits for KEEPALIVE_CANCEL), False
+		# for a CTAPHID_INIT re-sync (the channel was reset, INIT is the reply)
+		self._cancel_reply = True
 
 	# --- inbound ---
 
@@ -174,7 +178,7 @@ class CtapHidDevice:
 			new_cid = cid
 			if cid in self.channels:
 				self.channels[cid].reset()
-			self._cancel_active(cid)
+			self._cancel_active(cid, reply=False)
 
 		response = nonce + struct.pack(
 			">IBBBBB", new_cid, CTAPHID_PROTOCOL_VERSION, 0, 0, 0,
@@ -233,12 +237,17 @@ class CtapHidDevice:
 
 		with self._lock:
 			cancelled = self._cancelled
+			cancel_reply = self._cancel_reply
 			self._active_cid = None
 			self._worker = None
 
-		if cancelled:
-			# The response is dropped: the client already moved on after CANCEL
+		if cancelled and not cancel_reply:
+			# A CTAPHID_INIT re-sync reset the channel; the INIT response was
+			# already sent, so drop this transaction's stale reply
 			return
+		# On CTAPHID_CANCEL `response` is CTAP2_ERR_KEEPALIVE_CANCEL, which the
+		# host is waiting for; on success it's the real answer. Either way the
+		# host expects exactly one response frame for its request
 		self._send_message(cid, CTAPHID_CBOR, response)
 
 	def _keepalive_loop(self, cid, stop):
@@ -246,11 +255,12 @@ class CtapHidDevice:
 		while not stop.wait(0.1):
 			self._send_message(cid, CTAPHID_KEEPALIVE, bytes([STATUS_UPNEEDED]))
 
-	def _cancel_active(self, cid):
+	def _cancel_active(self, cid, reply=True):
 		with self._lock:
 			if self._active_cid != cid:
 				return
 			self._cancelled = True
+			self._cancel_reply = reply
 		# Abort the in-flight face verification
 		self.authenticator.cancel()
 

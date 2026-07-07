@@ -129,8 +129,11 @@ def test_keepalive_emitted_during_slow_cbor():
 	assert parse_frame(sent[-1])[1] == CTAPHID_CBOR
 
 
-def test_cancel_aborts_verification():
-	auth = FakeAuthenticator(response=b"\x00", delay=2.0)
+def test_cancel_aborts_verification_and_replies():
+	# CTAPHID_CANCEL aborts the face check, and per spec the operation must
+	# still return a response frame (KEEPALIVE_CANCEL) so the host isn't left
+	# waiting (which crashed browsers)
+	auth = FakeAuthenticator(response=bytes([0x2D]), delay=2.0)
 	device, sent, _ = build_device(auth)
 	cid = do_init(device, sent)
 	device.feed_report(init_frame(cid, CTAPHID_CBOR, b"\x02"))
@@ -138,8 +141,8 @@ def test_cancel_aborts_verification():
 	device.feed_report(init_frame(cid, CTAPHID_CANCEL, b""))
 	time.sleep(0.2)
 	assert auth.cancelled is True
-	# No CBOR response frame is sent after a cancel
-	assert all(parse_frame(f)[1] != CTAPHID_CBOR for f in sent)
+	cbor = [parse_frame(f) for f in sent if parse_frame(f)[1] == CTAPHID_CBOR]
+	assert cbor and cbor[-1][2] == bytes([0x2D])
 
 
 def test_fragmented_request_reassembled():
@@ -200,15 +203,17 @@ def test_concurrent_sends_do_not_interleave():
 
 
 def test_reinit_cancels_active_operation():
-	auth = FakeAuthenticator(response=b"\x00", delay=2.0)
+	auth = FakeAuthenticator(response=bytes([0x2D]), delay=2.0)
 	device, sent, _ = build_device(auth)
 	cid = do_init(device, sent)
 	device.feed_report(init_frame(cid, CTAPHID_CBOR, b"\x02"))
 	time.sleep(0.1)
 	# The browser re-INITs the same channel to restart (e.g. a double click)
 	device.feed_report(init_frame(cid, CTAPHID_INIT, b"12345678"))
-	time.sleep(0.1)
+	time.sleep(0.2)
 	assert auth.cancelled is True
+	# The channel was reset, so no stale CBOR response is sent for it
+	assert all(parse_frame(f)[1] != CTAPHID_CBOR for f in sent)
 
 
 def test_channel_busy_rejected():
