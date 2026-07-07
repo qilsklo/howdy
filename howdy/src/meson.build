@@ -44,9 +44,13 @@ py_sources = [
     'verification.py',
     'webauthn/__init__.py',
     'webauthn/authenticator.py',
+    'webauthn/ctaphid.py',
     'webauthn/keystore.py',
     'webauthn/keystore_tpm.py',
+    'webauthn/service.py',
     'webauthn/store.py',
+    'webauthn/uhid.py',
+    'webauthn_daemon.py',
     py_paths,
 ]
 
@@ -175,3 +179,48 @@ install_data(
   install_dir: get_option('bindir'),
   install_tag: 'bin',
 )
+
+# Optional Howdy WebAuthn daemon, systemd unit and udev rule. Everything here
+# is inert unless the user both enables it in config.ini and starts the
+# service, so it never affects the normal PAM / login / sudo path.
+if get_option('with_webauthn')
+    bindir = get_option('prefix') / get_option('bindir')
+    webauthn_daemon_conf = configuration_data({
+        'script_path': join_paths(pysourcesinstalldir, 'webauthn_daemon.py'),
+        'python_path': py.full_path(),
+    })
+    webauthn_bin = configure_file(
+        input: 'bin/howdy.in',
+        output: 'howdy-webauthn',
+        configuration: webauthn_daemon_conf,
+    )
+    install_data(
+        webauthn_bin,
+        install_mode: 'rwxr-xr-x',
+        install_dir: get_option('bindir'),
+        install_tag: 'bin',
+    )
+
+    systemd_unit = configure_file(
+        input: 'webauthn/howdy-webauthn.service.in',
+        output: 'howdy-webauthn.service',
+        configuration: configuration_data({
+            'bindir': bindir,
+            'confdir': confdir,
+            'datadir': datadir,
+        }),
+    )
+    install_data(
+        systemd_unit,
+        install_dir: get_option('prefix') / get_option('libdir') / 'systemd' / 'system',
+        install_mode: 'rw-r--r--',
+        install_tag: 'webauthn',
+    )
+
+    install_data(
+        'webauthn/70-howdy-webauthn.rules',
+        install_dir: get_option('prefix') / get_option('libdir') / 'udev' / 'rules.d',
+        install_mode: 'rw-r--r--',
+        install_tag: 'webauthn',
+    )
+endif
