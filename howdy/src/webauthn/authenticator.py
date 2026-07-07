@@ -4,6 +4,7 @@
 # fresh Howdy face check before every credential operation
 
 import hashlib
+import logging
 import os
 import time
 
@@ -33,6 +34,21 @@ NEXT_ASSERTION_WINDOW = 30
 
 ERR = CtapError.ERR
 FLAG = AuthenticatorData.FLAG
+
+# Operational logging. Deliberately never logs keys, credential IDs,
+# assertions, biometric data or client data hashes; only operation names,
+# RP ids, counts and outcomes so a failing ceremony can be diagnosed.
+log = logging.getLogger("howdy.webauthn")
+
+_COMMAND_NAMES = {
+	CMD_MAKE_CREDENTIAL: "makeCredential",
+	CMD_GET_ASSERTION: "getAssertion",
+	CMD_GET_INFO: "getInfo",
+	CMD_CLIENT_PIN: "clientPin",
+	CMD_RESET: "reset",
+	CMD_GET_NEXT_ASSERTION: "getNextAssertion",
+	CMD_SELECTION: "selection",
+}
 
 
 def _rp_id_hash(rp_id):
@@ -67,7 +83,9 @@ class Authenticator:
 
 	def _verify_user(self):
 		"""Run a fresh face verification, raises CtapError unless it succeeds"""
+		log.info("starting face verification (timeout=%s)", self.verify_timeout)
 		result = self.verifier.verify(timeout=self.verify_timeout)
+		log.info("face verification result: %s", result.name)
 		if result != VerificationResult.SUCCESS:
 			raise _verification_error(result)
 
@@ -103,16 +121,21 @@ class Authenticator:
 		}
 		handler = handlers.get(command)
 		if handler is None:
+			log.warning("unsupported command 0x%02x", command)
 			if command == CMD_CLIENT_PIN:
 				return bytes([ERR.PIN_AUTH_INVALID])
 			return bytes([ERR.INVALID_COMMAND])
 
+		log.info("%s requested", _COMMAND_NAMES.get(command, command))
 		try:
 			response = handler(params)
 		except CtapError as err:
+			log.info("%s -> CTAP error 0x%02x (%s)", _COMMAND_NAMES.get(command, command), err.code, err.code.name)
 			return bytes([err.code])
 		except Exception:
+			log.exception("%s -> unexpected error", _COMMAND_NAMES.get(command, command))
 			return bytes([ERR.OTHER])
+		log.info("%s -> success", _COMMAND_NAMES.get(command, command))
 
 		if response is None:
 			return bytes([ERR.SUCCESS])
@@ -155,6 +178,7 @@ class Authenticator:
 		user_id = user.get("id")
 		if not isinstance(rp_id, str) or not isinstance(user_id, bytes) or not 1 <= len(user_id) <= 64:
 			raise CtapError(ERR.INVALID_PARAMETER)
+		log.info("makeCredential rp_id=%s rk=%s", rp_id, bool(options.get("rk", False)))
 
 		if options.get("up") is False:
 			raise CtapError(ERR.INVALID_OPTION)
@@ -241,6 +265,8 @@ class Authenticator:
 			]
 
 		credentials = self.store.find_for_rp(rp_id, allow_ids=allow_ids)
+		log.info("getAssertion rp_id=%s allow_list=%s matched=%d",
+			rp_id, "none" if allow_ids is None else len(allow_ids), len(credentials))
 		if not credentials:
 			# Note: replying without user interaction lets any client with
 			# transport access probe which RPs have credentials, see the

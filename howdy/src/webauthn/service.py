@@ -4,6 +4,7 @@
 # the camera and the root-only credential store).
 
 import configparser
+import logging
 import os
 import pwd
 import signal
@@ -40,6 +41,10 @@ def _resolve_user(config):
 
 
 def run_service(state):
+	# Route the authenticator's operational logging to stderr, which systemd
+	# captures into the journal (journalctl -u howdy-webauthn)
+	logging.basicConfig(level=logging.INFO, format="%(name)s: %(message)s")
+
 	config = configparser.ConfigParser()
 	config.read(paths_factory.config_file_path())
 

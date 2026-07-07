@@ -101,10 +101,18 @@ class UHidDevice:
 		return self._fd
 
 	def close(self):
-		if self._fd is not None:
-			try:
-				self._write_event(UHID_DESTROY)
-			except OSError:
-				pass
-			os.close(self._fd)
-			self._fd = None
+		# May be called re-entrantly (signal handler interrupting the read
+		# loop) and from more than one place, so capture the fd and null it
+		# before touching it, and never raise
+		fd = self._fd
+		if fd is None:
+			return
+		self._fd = None
+		try:
+			os.write(fd, struct.pack("<I", UHID_DESTROY))
+		except OSError:
+			pass
+		try:
+			os.close(fd)
+		except OSError:
+			pass
