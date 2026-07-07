@@ -73,10 +73,15 @@ class CtapHidDevice:
 
 	def __init__(self, authenticator, send_report):
 		self.authenticator = authenticator
-		self.send_report = send_report
+		self._raw_send_report = send_report
 		self.channels = {}
 		self._next_cid = 1
 		self._lock = threading.Lock()
+		# Serialises outbound reports: keepalive, worker-response and
+		# feed-thread frames run concurrently, and a multi-frame message must
+		# never have a foreign frame spliced into it or the host's reassembler
+		# corrupts (crashing the browser on overlapping ceremonies)
+		self._send_lock = threading.Lock()
 		self._worker = None
 		self._active_cid = None
 		self._cancelled = False
@@ -162,10 +167,14 @@ class CtapHidDevice:
 				self._next_cid += 1
 			self.channels[new_cid] = Channel(new_cid)
 		else:
-			# Re-sync of an existing channel: abort its in-flight transaction
+			# Re-sync of an existing channel: abort its in-flight transaction,
+			# including any running face verification, so a browser restarting
+			# the ceremony (e.g. the user clicking twice) doesn't leave the old
+			# operation and its keepalives running
 			new_cid = cid
 			if cid in self.channels:
 				self.channels[cid].reset()
+			self._cancel_active(cid)
 
 		response = nonce + struct.pack(
 			">IBBBBB", new_cid, CTAPHID_PROTOCOL_VERSION, 0, 0, 0,
@@ -248,21 +257,26 @@ class CtapHidDevice:
 	# --- outbound framing ---
 
 	def _send_message(self, cid, command, data):
-		"""Fragment data into an init frame plus continuation frames"""
-		length = len(data)
-		header = struct.pack(">IBH", cid, 0x80 | command, length)
-		chunk = data[:INIT_PAYLOAD]
-		frame = header + chunk
-		self.send_report(frame.ljust(HID_REPORT_SIZE, b"\x00"))
+		"""Fragment data into an init frame plus continuation frames
 
-		offset = len(chunk)
-		seq = 0
-		while offset < length:
-			chunk = data[offset:offset + CONT_PAYLOAD]
-			frame = struct.pack(">IB", cid, seq & 0x7F) + chunk
-			self.send_report(frame.ljust(HID_REPORT_SIZE, b"\x00"))
-			offset += len(chunk)
-			seq += 1
+		Held under _send_lock so the whole message reaches the host as one
+		contiguous run of frames, even when other threads are also sending.
+		"""
+		length = len(data)
+		with self._send_lock:
+			header = struct.pack(">IBH", cid, 0x80 | command, length)
+			chunk = data[:INIT_PAYLOAD]
+			frame = header + chunk
+			self._raw_send_report(frame.ljust(HID_REPORT_SIZE, b"\x00"))
+
+			offset = len(chunk)
+			seq = 0
+			while offset < length:
+				chunk = data[offset:offset + CONT_PAYLOAD]
+				frame = struct.pack(">IB", cid, seq & 0x7F) + chunk
+				self._raw_send_report(frame.ljust(HID_REPORT_SIZE, b"\x00"))
+				offset += len(chunk)
+				seq += 1
 
 	def _send_error(self, cid, code):
 		self._send_message(cid, CTAPHID_ERROR, bytes([code]))

@@ -170,6 +170,47 @@ def test_long_response_fragmented():
 	assert total == 201
 
 
+def test_concurrent_sends_do_not_interleave():
+	# Two threads each send a multi-frame message; with a slow sink to widen
+	# the race window, every message's frames must still arrive contiguously
+	import threading
+
+	order = []
+
+	def slow_sink(frame):
+		cid = struct.unpack(">I", frame[:4])[0]
+		order.append(cid)
+		time.sleep(0.001)
+
+	device = CtapHidDevice(FakeAuthenticator(), slow_sink)
+	data = bytes(range(150))  # spans an init frame plus two continuation frames
+
+	def send(cid):
+		device._send_message(cid, CTAPHID_PING, data)
+
+	threads = [threading.Thread(target=send, args=(cid,)) for cid in (0xAA, 0xBB)]
+	for t in threads:
+		t.start()
+	for t in threads:
+		t.join()
+
+	# Each cid's frames form one unbroken run: at most one transition per cid
+	transitions = sum(1 for a, b in zip(order, order[1:]) if a != b)
+	assert transitions == 1, order
+
+
+def test_reinit_cancels_active_operation():
+	auth = FakeAuthenticator(response=b"\x00", delay=2.0)
+	device, sent, _ = build_device(auth)
+	cid = do_init(device, sent)
+	device.feed_report(init_frame(cid, CTAPHID_CBOR, b"\x02"))
+	time.sleep(0.1)
+	# The browser re-INITs the same channel to restart (e.g. a double click)
+	device.feed_report(init_frame(cid, CTAPHID_INIT, b"12345678"))
+	time.sleep(0.1)
+	assert auth.cancelled is True
+
+
 def test_channel_busy_rejected():
 	auth = FakeAuthenticator(response=b"\x00", delay=0.4)
 	device, sent, _ = build_device(auth)
