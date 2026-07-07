@@ -88,10 +88,20 @@ class InferenceEngine:
 				wanted = ["MIGraphXExecutionProvider", "ROCMExecutionProvider"]
 				gpu = [] if forced == "ort-cpu" else [p for p in wanted if p in available]
 				options = ort.SessionOptions()
-				options.log_severity_level = 3
-				self.session = ort.InferenceSession(
-					model_path, sess_options=options,
-					providers=gpu + ["CPUExecutionProvider"])
+				options.log_severity_level = 4
+				try:
+					self.session = ort.InferenceSession(
+						model_path, sess_options=options,
+						providers=gpu + ["CPUExecutionProvider"])
+				except Exception:
+					# GPU provider failed to initialize (missing ROCm libs,
+					# unsupported gfx target, ...): retry on the CPU alone
+					if not gpu:
+						raise
+					gpu = []
+					self.session = ort.InferenceSession(
+						model_path, sess_options=options,
+						providers=["CPUExecutionProvider"])
 				self.input_name = self.session.get_inputs()[0].name
 				self.backend = "ort:" + self.session.get_providers()[0]
 				return
@@ -112,7 +122,21 @@ class InferenceEngine:
 	def run(self, blob):
 		"""Return the list of output tensors for a NCHW float blob"""
 		if self.backend.startswith("ort"):
-			return self.session.run(None, {self.input_name: blob})
+			try:
+				return self.session.run(None, {self.input_name: blob})
+			except Exception:
+				# A GPU provider can also fail at inference time (e.g. a HIP
+				# kernel error on an unsupported gfx target). Rebuild the
+				# session on the CPU once and keep going rather than failing
+				# an authentication attempt.
+				if self.session.get_providers()[0] == "CPUExecutionProvider":
+					raise
+				import onnxruntime as ort
+				print("GPU inference failed on %s, falling back to CPU" % self.backend)
+				self.session = ort.InferenceSession(
+					self.model_path, providers=["CPUExecutionProvider"])
+				self.backend = "ort:CPUExecutionProvider(runtime-fallback)"
+				return self.session.run(None, {self.input_name: blob})
 		self.net.setInput(blob)
 		outs = self.net.forward(self.out_names)
 		return list(outs) if isinstance(outs, (list, tuple)) else [outs]

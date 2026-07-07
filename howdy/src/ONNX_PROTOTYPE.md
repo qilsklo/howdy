@@ -27,13 +27,23 @@ verification pipeline intended to replace the dlib stack in `compare.py`:
    pip install --user --break-system-packages onnxruntime
    ```
 
-   To move inference onto the Radeon 780M, install the ROCm stack and the
-   ROCm build of ONNX Runtime; the ROCm/MIGraphX execution providers are then
-   picked up automatically:
+   To move inference onto the Radeon 780M, install the ROCm stack plus the
+   MIGraphX build of ONNX Runtime (for ROCm 7.x AMD ships the MIGraphX
+   execution provider; the old ROCm EP wheels target ROCm 6.x). The wheel's
+   `rocm-rel-*` index version **must match the system ROCm version**, only
+   cp310/cp312 wheels exist (hence the 3.12 venv), and on glibc >= 2.41 the
+   wheel needs an execstack fix before it will import:
 
    ```sh
-   pip install onnxruntime-rocm --extra-index-url https://repo.radeon.com/rocm/manylinux/rocm-rel-6.4/
-   # RDNA3 iGPUs (gfx1103) may need: export HSA_OVERRIDE_GFX_VERSION=11.0.0
+   sudo pacman -S --needed rocm-hip-runtime migraphx     # Arch; match rel index below
+   python3.12 -m venv ~/.venvs/howdy-rocm
+   ~/.venvs/howdy-rocm/bin/pip install numpy opencv-python
+   ~/.venvs/howdy-rocm/bin/pip install onnxruntime-migraphx \
+       --index-url https://repo.radeon.com/rocm/manylinux/rocm-rel-7.2.4/ \
+       --extra-index-url https://pypi.org/simple
+   python3 onnx-data/fix-execstack.py ~/.venvs/howdy-rocm
+   # RDNA3 iGPUs (gfx1103) are not an official ROCm target:
+   export HSA_OVERRIDE_GFX_VERSION=11.0.0
    ```
 
    The engine is picked automatically (ORT GPU EP → ORT CPU → OpenCV DNN) and
@@ -94,16 +104,45 @@ stream with two independent signals that must both pass:
 on `LivenessAnalyzer` and are deliberately conservative defaults — tune them
 with `--test` against your own spoof media before trusting them.
 
-## PAM integration plan
+## Integration plan (WebAuthn daemon)
 
-The prototype mirrors `compare.py`'s contract (argv[1] = username, exit-code
-protocol) so the C PAM wrapper needs no changes beyond invoking this script
-and mapping exit code 14 to a "spoof suspected" message. Remaining work before
-it can replace `compare.py`:
+The consumer of this pipeline is `howdy-webauthn`, the virtual FIDO2
+authenticator: face verification gates passkey assertions. The prototype
+mirrors `compare.py`'s contract (argv[1] = username, exit-code protocol), so
+the internal verification API can shell out to it — or import it — the same
+way it drives `compare.py`, mapping exit code 14 to a distinct
+"presentation attack suspected" UV failure.
+
+### Running the pipeline on the GPU inside the daemon
+
+`howdy-webauthn.service` is hardened, and as shipped the GPU is not reachable
+from inside it. A drop-in (`sudo systemctl edit howdy-webauthn`) needs:
+
+```ini
+[Service]
+# ROCm environment: gfx1103 override must live here, not in a shell profile,
+# because systemd services inherit nothing from user shells
+Environment=HSA_OVERRIDE_GFX_VERSION=11.0.0
+# ROCm compute + graphics device nodes (root bypasses the render group,
+# but DeviceAllow still filters them)
+DeviceAllow=/dev/kfd rw
+DeviceAllow=char-drm rw
+```
+
+Two more hardening directives can bite and may need relaxing *only if* GPU
+init fails in the journal: `MemoryDenyWriteExecute=true` (GPU runtimes map
+code buffers) and `ProtectHome=true` (blocks a venv living under `/home` —
+for production, install the ONNX runtime somewhere system-wide instead).
+The engine falls back to the CPU provider automatically in both cases, so a
+misconfigured GPU degrades speed, never availability.
+
+### Remaining work
 
 * store enrollments in `paths_factory.user_model_path()` format (versioned,
   multiple models per user) instead of `onnx-data/enroll_<user>.json`
-* read thresholds/device from Howdy's `config.ini` instead of CLI flags
-* wire `howdy-gtk` status messages and snapshot capture back in
+* read thresholds/device from Howdy's `config.ini` (`[webauthn]`) instead of
+  CLI flags
+* call the verification routine in-process from the daemon so the models
+  stay loaded between assertions (~0.3s saved per authentication)
 * package the ONNX weights via `onnx-data/install.sh` the same way
   `dlib-data/install.sh` is handled by the meson build
