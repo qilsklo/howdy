@@ -223,4 +223,12 @@ if get_option('with_webauthn')
         install_mode: 'rw-r--r--',
         install_tag: 'webauthn',
     )
+
+    # The operator guide the systemd unit's Documentation= points at
+    install_data(
+        '../../docs/webauthn.md',
+        install_dir: datadir / 'doc' / 'howdy',
+        install_mode: 'rw-r--r--',
+        install_tag: 'webauthn',
+    )
 endif
