@@ -1,0 +1,5 @@
+# Downloaded ONNX weights (fetched by install.sh) and per-user biometric data
+*.onnx
+enroll_*.json
+liveness_svm.xml
+pad/
