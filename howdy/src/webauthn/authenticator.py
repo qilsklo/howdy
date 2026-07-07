@@ -64,6 +64,20 @@ def _verification_error(result):
 	return CtapError(ERR.OPERATION_DENIED)
 
 
+def _check_pin_uv_auth_param(pin_uv_auth_param):
+	"""Handle the platform's pinUvAuthParam, if any.
+
+	We do user verification with a built-in face check and support neither a
+	client PIN nor pinUvAuthToken. A zero-length pinUvAuthParam is the CTAP2.1
+	way for a platform to probe our PIN/UV state; answering PIN_NOT_SET tells
+	it there is no PIN so it retries the ceremony using built-in UV. Any
+	non-empty value would be a token we never issued, so it is ignored: the
+	face check is the real UV gate regardless.
+	"""
+	if pin_uv_auth_param is not None and len(pin_uv_auth_param) == 0:
+		raise CtapError(ERR.PIN_NOT_SET)
+
+
 class Authenticator:
 	"""Handles CTAP2 authenticator commands for a single user's credentials
 
@@ -170,9 +184,7 @@ class Authenticator:
 		if not isinstance(client_data_hash, bytes) or not isinstance(rp, dict) \
 				or not isinstance(user, dict) or not isinstance(key_params, list):
 			raise CtapError(ERR.MISSING_PARAMETER)
-		if 8 in params:
-			# We advertise no PIN support, no pinUvAuthParam is acceptable
-			raise CtapError(ERR.PIN_AUTH_INVALID)
+		_check_pin_uv_auth_param(params.get(8))
 
 		rp_id = rp.get("id")
 		user_id = user.get("id")
@@ -251,11 +263,7 @@ class Authenticator:
 
 		if not isinstance(rp_id, str) or not isinstance(client_data_hash, bytes):
 			raise CtapError(ERR.MISSING_PARAMETER)
-		if 6 in params:
-			raise CtapError(ERR.PIN_AUTH_INVALID)
-		if options.get("up") is False:
-			# Silent assertions would bypass the face check, never allowed
-			raise CtapError(ERR.UNSUPPORTED_OPTION)
+		_check_pin_uv_auth_param(params.get(6))
 
 		allow_ids = None
 		if allow_list is not None:
@@ -265,15 +273,24 @@ class Authenticator:
 			]
 
 		credentials = self.store.find_for_rp(rp_id, allow_ids=allow_ids)
-		log.info("getAssertion rp_id=%s allow_list=%s matched=%d",
-			rp_id, "none" if allow_ids is None else len(allow_ids), len(credentials))
+		silent = options.get("up") is False
+		log.info("getAssertion rp_id=%s allow_list=%s matched=%d silent=%s",
+			rp_id, "none" if allow_ids is None else len(allow_ids), len(credentials), silent)
 		if not credentials:
 			# Note: replying without user interaction lets any client with
 			# transport access probe which RPs have credentials, see the
 			# threat model in docs/webauthn-design.md
 			raise CtapError(ERR.NO_CREDENTIALS)
 
-		# Face verification: the single gate in front of every signature
+		if silent:
+			# Pre-flight: the platform sets up=false only to discover which
+			# credentials exist so it can filter an allow/exclude list. Return
+			# an assertion with neither user presence nor verification, run no
+			# face check and do not advance the counter. An RP rejects such an
+			# assertion (up=0) as a login, so this is not a face-check bypass.
+			return self._silent_assertion(credentials[0], client_data_hash)
+
+		# Face verification: the single gate in front of every real signature
 		self._verify_user()
 
 		discoverable = allow_ids is None
@@ -285,6 +302,17 @@ class Authenticator:
 		self._next_assertions = responses[1:]
 		self._next_assertion_time = time.monotonic()
 		return responses[0]
+
+	def _silent_assertion(self, credential, client_data_hash):
+		# Pre-flight response: flags 0 (no UP, no UV), counter left untouched.
+		auth_data = AuthenticatorData.create(
+			_rp_id_hash(credential.rp_id), 0, credential.sign_count)
+		signature = self.keystore.sign(credential.key_ref, bytes(auth_data) + client_data_hash)
+		return {
+			1: {"type": "public-key", "id": credential.credential_id},
+			2: bytes(auth_data),
+			3: signature,
+		}
 
 	def _assert_credential(self, credential, client_data_hash, discoverable, total):
 		# Persist the incremented counter before the assertion leaves the

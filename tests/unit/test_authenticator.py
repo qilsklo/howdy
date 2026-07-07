@@ -155,10 +155,21 @@ def test_make_credential_exclude_list_other_rp_ignored(authenticator):
 	assert response[1] == "packed"
 
 
-def test_make_credential_rejects_pin_auth(authenticator):
+def test_make_credential_zero_length_pin_auth_probes_pin_state(authenticator, verifier):
+	# A zero-length pinUvAuthParam is the platform probing our PIN/UV state;
+	# we answer PIN_NOT_SET and do not run the face check or create anything
 	with pytest.raises(CtapError) as err:
-		authenticator.make_credential(make_credential_params({8: b"\x00" * 16}))
-	assert err.value.code == ERR.PIN_AUTH_INVALID
+		authenticator.make_credential(make_credential_params({8: b""}))
+	assert err.value.code == ERR.PIN_NOT_SET
+	assert verifier.calls == 0
+	assert authenticator.store.list_all() == []
+
+
+def test_make_credential_ignores_nonempty_pin_auth(authenticator):
+	# A non-empty pinUvAuthParam is a token we never issued: ignore it and
+	# rely on the face check, so the credential is still created
+	response = authenticator.make_credential(make_credential_params({8: b"\x00" * 16}))
+	assert response[1] == "packed"
 
 
 def test_make_credential_cred_protect_echoed(authenticator):
@@ -250,11 +261,39 @@ def test_get_assertion_counter_updates_and_persists(authenticator, tmp_path):
 	assert reloaded.find_by_id(attested.credential_id).sign_count == 3
 
 
-def test_get_assertion_up_false_rejected(authenticator):
-	register(authenticator)
+def test_get_assertion_up_false_is_silent_preflight(authenticator, verifier):
+	# up=false is the platform's silent credential-discovery pre-flight: it
+	# returns an assertion with no UP/UV, runs no face check and does not
+	# advance the signature counter
+	_, _, attested = register(authenticator)
+	allow = [{"type": "public-key", "id": attested.credential_id}]
+	before = verifier.calls
+	response = authenticator.get_assertion(get_assertion_params({3: allow, 5: {"up": False}}))
+
+	auth_data = AuthenticatorData(response[2])
+	assert not auth_data.is_user_present()
+	assert not auth_data.is_user_verified()
+	assert auth_data.counter == 0
+	assert verifier.calls == before
+	assert authenticator.store.find_by_id(attested.credential_id).sign_count == 0
+
+	# The signature is still well formed over the returned auth_data
+	public_key = CoseKey.parse(attested.public_key)
+	public_key.verify(response[2] + CLIENT_DATA_HASH, response[3])
+
+
+def test_get_assertion_up_false_no_credential(authenticator):
+	# Pre-flight for a credential we don't have still reports absence
 	with pytest.raises(CtapError) as err:
 		authenticator.get_assertion(get_assertion_params({5: {"up": False}}))
-	assert err.value.code == ERR.UNSUPPORTED_OPTION
+	assert err.value.code == ERR.NO_CREDENTIALS
+
+
+def test_get_assertion_zero_length_pin_auth_probes_pin_state(authenticator):
+	register(authenticator)
+	with pytest.raises(CtapError) as err:
+		authenticator.get_assertion(get_assertion_params({6: b""}))
+	assert err.value.code == ERR.PIN_NOT_SET
 
 
 def test_get_next_assertion(authenticator):
