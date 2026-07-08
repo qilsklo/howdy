@@ -42,7 +42,9 @@ if [ "$GPU" -eq 1 ]; then
 	command -v python3.12 >/dev/null || { echo "python3.12 required for the ROCm wheel"; exit 1; }
 	[ -d /opt/rocm ] || { echo "ROCm not installed (pacman -S rocm-hip-runtime migraphx)"; exit 1; }
 	python3.12 -m venv "$VENV"
-	"$VENV/bin/pip" install --quiet --upgrade numpy opencv-python fido2 cryptography
+	# opencv-python must stay <5: the PyPI 5.x wheels dropped cv2.ml, which
+	# the LBP liveness classifier needs (system/contrib builds still have it)
+	"$VENV/bin/pip" install --quiet --upgrade numpy 'opencv-python>=4.8,<5' fido2 cryptography
 	"$VENV/bin/pip" install --quiet onnxruntime-migraphx \
 		--index-url "https://repo.radeon.com/rocm/manylinux/$ROCM_REL/" \
 		--extra-index-url https://pypi.org/simple
@@ -104,8 +106,12 @@ if [ -n "$TARGET_USER" ]; then
 	then
 		echo "  $TARGET_USER already enrolled"
 	else
-		echo "  Enrolling $TARGET_USER - look at the IR camera..."
-		"$PYBIN" "$HOWDY_LIB/compare_onnx.py" "$TARGET_USER" --enroll
+		echo "  Enrolling $TARGET_USER - LOOK AT THE IR CAMERA (starting in 3s)..."
+		sleep 3
+		if ! "$PYBIN" "$HOWDY_LIB/compare_onnx.py" "$TARGET_USER" --enroll; then
+			echo "  WARNING: enrollment did not complete. Re-run it any time with:"
+			echo "    sudo $PYBIN $HOWDY_LIB/compare_onnx.py $TARGET_USER --enroll"
+		fi
 	fi
 fi
 

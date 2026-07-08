@@ -432,7 +432,13 @@ class LivenessAnalyzer:
 		if self.cnn is None:
 			svm_path = os.path.join(DATA_DIR, "liveness_svm.xml")
 			if os.path.isfile(svm_path):
-				self.svm = cv2.ml.SVM_load(svm_path)
+				try:
+					self.svm = cv2.ml.SVM_load(svm_path)
+				except AttributeError:
+					# PyPI opencv-python 5.x dropped cv2.ml (it moved to the
+					# contrib packages); run the heuristic rather than dying
+					print("This OpenCV build has no cv2.ml, LBP SVM disabled "
+						  "(install opencv-python<5 or opencv-contrib-python)")
 
 	def texture_mode(self):
 		if self.cnn is not None:
