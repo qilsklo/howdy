@@ -47,6 +47,36 @@ if [ "$GPU" -eq 1 ]; then
 	# opencv-python must stay <5: the PyPI 5.x wheels dropped cv2.ml, which
 	# the LBP liveness classifier needs (system/contrib builds still have it)
 	"$VENV/bin/pip" install --quiet --upgrade numpy 'opencv-python>=4.8,<5' fido2 cryptography
+	"$VENV/bin/pip" install --quiet cffi pkgconfig setuptools pyyaml asn1crypto
+	mkdir -p "$DATA/tpm2-build"
+	pushd "$DATA/tpm2-build" >/dev/null
+	"$VENV/bin/pip" download --quiet --no-deps tpm2-pytss
+	tar -xzf tpm2-pytss-*.tar.gz
+	cd tpm2-pytss-*/
+	cat << 'EOF' > patch.diff
+--- scripts/prepare_headers.py
++++ scripts/prepare_headers.py
+@@ -33,5 +33,5 @@
+     # Restructure #defines with ...
+-    s = re.sub("(#define [A-Za-z0-9_]+) +\(\(.*?\) \(.*?\)\)", "\g<1>...", s)
+-    s = re.sub("(#define [A-Za-z0-9_]+) +\(\(\(.*?\) .*\)", "\g<1>...", s)
+-    s = re.sub("(#define [A-Za-z0-9_]+) +\(\(.*?\).*?\) ", "\g<1>...", s)
++    s = re.sub("(#define [A-Za-z0-9_]+) +\(\(\(.*?\) .*\)", "\g<1> ...", s)
++    s = re.sub("(#define [A-Za-z0-9_]+) +\(\(.*?\) \(.*?\)\)", "\g<1> ...", s)
++    s = re.sub("(#define [A-Za-z0-9_]+) +\(\(.*?\).*?\)", "\g<1> ...", s)
+     s = re.sub(
+EOF
+	patch scripts/prepare_headers.py patch.diff
+	mkdir -p "$DATA/gcc-wrapper"
+	echo '#!/bin/bash' > "$DATA/gcc-wrapper/gcc"
+	echo 'exec /usr/bin/gcc -std=c11 "$@"' >> "$DATA/gcc-wrapper/gcc"
+	echo '#!/bin/bash' > "$DATA/gcc-wrapper/cpp"
+	echo 'exec /usr/bin/cpp -std=c11 "$@"' >> "$DATA/gcc-wrapper/cpp"
+	chmod +x "$DATA/gcc-wrapper/gcc" "$DATA/gcc-wrapper/cpp"
+	PATH="$DATA/gcc-wrapper:$PATH" "$VENV/bin/pip" install --quiet --no-build-isolation .
+	rm -rf "$DATA/gcc-wrapper"
+	popd >/dev/null
+	rm -rf "$DATA/tpm2-build"
 	"$VENV/bin/pip" install --quiet onnxruntime-migraphx \
 		--index-url "https://repo.radeon.com/rocm/manylinux/$ROCM_REL/" \
 		--extra-index-url https://pypi.org/simple
