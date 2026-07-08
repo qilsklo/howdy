@@ -21,8 +21,10 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 	echo "ERROR: $HOWDY_LIB/onnx_face.py not installed - run 'sudo meson install -C build' first"; exit 1; }
 
 GPU=0
-[ "${1:-}" = "--gpu" ] && GPU=1
-
+if [ "${1:-}" = "--gpu" ]; then
+	GPU=1
+	export HSA_OVERRIDE_GFX_VERSION="$GFX_OVERRIDE"
+fi
 echo "== 1/5 ONNX weights =="
 mkdir -p "$DATA"
 if ls "$SCRIPT_DIR"/*.onnx >/dev/null 2>&1 && [ "$SCRIPT_DIR" != "$DATA" ]; then
@@ -110,7 +112,11 @@ if [ -n "$TARGET_USER" ]; then
 		sleep 3
 		if ! "$PYBIN" "$HOWDY_LIB/compare_onnx.py" "$TARGET_USER" --enroll; then
 			echo "  WARNING: enrollment did not complete. Re-run it any time with:"
-			echo "    sudo $PYBIN $HOWDY_LIB/compare_onnx.py $TARGET_USER --enroll"
+			if [ "$GPU" -eq 1 ]; then
+				echo "    sudo HSA_OVERRIDE_GFX_VERSION=$GFX_OVERRIDE $PYBIN $HOWDY_LIB/compare_onnx.py $TARGET_USER --enroll"
+			else
+				echo "    sudo $PYBIN $HOWDY_LIB/compare_onnx.py $TARGET_USER --enroll"
+			fi
 		fi
 	fi
 fi
