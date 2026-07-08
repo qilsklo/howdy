@@ -18,6 +18,8 @@ class VerificationResult(enum.IntEnum):
 	TOO_DARK = 13
 	INVALID_DEVICE = 14
 	RUBBERSTAMP = 15
+	# ONNX pipeline only: the face matched but liveness rejected the attempt
+	PRESENTATION_ATTACK = 16
 	# Not produced by compare.py itself: the caller cancelled or hard-killed it
 	CANCELLED = 250
 	UNKNOWN_ERROR = 251
@@ -115,6 +117,65 @@ class BoundVerifier:
 
 	def cancel(self):
 		self._verifier.cancel()
+
+
+class OnnxBoundVerifier:
+	"""In-process verifier running the ONNX pipeline (onnx_face.py).
+
+	Unlike BoundVerifier there is no subprocess: the models are loaded once
+	and stay resident, so repeated verifications skip session creation and
+	the GPU kernel-cache load. Cancellation is polled between camera frames.
+	"""
+
+	def __init__(self, user, preload=False):
+		self.user = user
+		self._pipeline = None
+		self._lock = threading.Lock()
+		self._cancel = threading.Event()
+		if preload:
+			threading.Thread(target=self._get_pipeline, daemon=True).start()
+
+	def _get_pipeline(self):
+		with self._lock:
+			if self._pipeline is None:
+				import onnx_face
+				self._pipeline = onnx_face.FacePipeline()
+			return self._pipeline
+
+	def verify(self, timeout=None):
+		if not self.user or self.user == "root":
+			return VerificationResult.ABORT
+		self._cancel.clear()
+		try:
+			pipeline = self._get_pipeline()
+			status = pipeline.verify_user(
+				self.user, timeout=timeout, cancel_check=self._cancel.is_set)
+		except Exception:
+			return VerificationResult.UNKNOWN_ERROR
+		if self._cancel.is_set():
+			return VerificationResult.CANCELLED
+		return VerificationResult.from_exit_code(status)
+
+	def cancel(self):
+		self._cancel.set()
+
+
+def create_verifier(user, config=None):
+	"""Build the verifier selected by [onnx] enabled in the config.
+
+	Defaults to the classic compare.py subprocess when the section is absent
+	or the ONNX dependencies are not importable.
+	"""
+	use_onnx = False
+	if config is not None:
+		use_onnx = config.getboolean("onnx", "enabled", fallback=False)
+	if use_onnx:
+		try:
+			import onnx_face  # noqa: F401 -- probe the dependency stack early
+			return OnnxBoundVerifier(user, preload=True)
+		except ImportError as err:
+			print("ONNX pipeline unavailable (%s), using compare.py" % err)
+	return BoundVerifier(user)
 
 
 def verify_face(user, timeout=None):

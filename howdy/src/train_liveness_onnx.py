@@ -18,8 +18,9 @@ import time
 import cv2
 import numpy as np
 
-from compare_onnx_prototype import (
-	DATA_DIR, SCRFD, ArcFace, LivenessAnalyzer, find_model, open_camera, read_gray)
+from onnx_face import (
+	DATA_DIR, SCRFD, ArcFace, LivenessAnalyzer, Settings, find_model,
+	open_camera, read_gray)
 
 SVM_PATH = os.path.join(DATA_DIR, "liveness_svm.xml")
 
@@ -34,7 +35,10 @@ def aligned_crops(detector, image):
 def capture(detector, out_dir, device, seconds):
 	"""Save aligned face crops from the IR camera into out_dir"""
 	os.makedirs(out_dir, exist_ok=True)
-	cap = open_camera(device)
+	settings = Settings.from_config()
+	if device:
+		settings.device_path = device
+	cap = open_camera(settings)
 	clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
 	start = time.time()
 	saved = 0
@@ -113,7 +117,7 @@ def main():
 	parser = argparse.ArgumentParser(description="Train the IR liveness SVM")
 	parser.add_argument("--capture", metavar="DIR", help="capture aligned crops into DIR instead of training")
 	parser.add_argument("--seconds", type=float, default=30.0)
-	parser.add_argument("--device", default=os.environ.get("HOWDY_IR_DEVICE", "/dev/video2"))
+	parser.add_argument("--device", help="override the IR camera device path")
 	parser.add_argument("--real", metavar="DIR", help="directory of genuine-face images/crops")
 	parser.add_argument("--spoof", metavar="DIR", help="directory of spoof images/crops")
 	args = parser.parse_args()

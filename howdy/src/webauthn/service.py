@@ -13,7 +13,7 @@ import sys
 import paths_factory
 
 from i18n import _
-from verification import BoundVerifier
+from verification import create_verifier
 from webauthn import create_keystore
 from webauthn.authenticator import Authenticator
 from webauthn.ctaphid import CtapHidDevice
@@ -61,7 +61,7 @@ def run_service(state):
 
 	store = CredentialStore(paths_factory.webauthn_credentials_path(user))
 	keystore = create_keystore(state["keystore"], paths_factory.webauthn_keystore_dir_path())
-	verifier = BoundVerifier(user)
+	verifier = create_verifier(user, config)
 	authenticator = Authenticator(store, keystore, verifier, verify_timeout=verify_timeout)
 
 	try:

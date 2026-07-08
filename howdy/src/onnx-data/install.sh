@@ -36,4 +36,15 @@ if [ "$copied" -lt 2 ]; then
 	exit 1
 fi
 
+# Anti-spoofing CNN (MiniFASNet architecture trained on CelebA-Spoof,
+# github.com/hairymax/Face-AntiSpoofing, Apache-2.0). Only used when
+# [onnx] pad_engine = cnn: it is RGB-only and does not work on IR cameras
+PAD_URL="https://github.com/hairymax/Face-AntiSpoofing/raw/main/saved_models/AntiSpoofing_bin_1.5_128.onnx"
+echo "Downloading anti-spoofing model (optional, RGB cameras only)"
+if curl -L --fail --progress-bar -o "$DIR/antispoof_bin.onnx" "$PAD_URL"; then
+	echo "Installed antispoof_bin.onnx ($(du -h "$DIR/antispoof_bin.onnx" | cut -f1))"
+else
+	echo "WARNING: anti-spoofing model download failed, continuing without it" >&2
+fi
+
 echo "Done. Weights are in $DIR"

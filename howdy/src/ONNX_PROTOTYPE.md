@@ -1,16 +1,27 @@
-# Howdy ONNX pipeline prototype
+# Howdy ONNX pipeline
 
-`compare_onnx_prototype.py` is a self-contained prototype of a Windows-Hello-style
-verification pipeline intended to replace the dlib stack in `compare.py`:
+A Windows-Hello-style verification pipeline replacing the dlib stack in
+`compare.py`, wired into the `howdy-webauthn` daemon:
 
-| Stage | Old (`compare.py`) | New (prototype) |
+| Stage | Old (`compare.py`) | New |
 |---|---|---|
 | Detection | dlib HOG / MMOD CNN | SCRFD (InsightFace), 5-point landmarks |
 | Alignment | dlib 5-landmark predictor | Similarity transform to canonical 112x112 ArcFace crop |
 | Embedding | dlib ResNet, 128-D | ArcFace ResNet-50, 512-D on a hypersphere |
 | Matching | Euclidean distance | Cosine similarity, threshold τ (default 0.40) |
-| PAD / liveness | none | LBP micro-texture + landmark parallax on the IR stream |
+| PAD / liveness | none | texture classifier + landmark parallax on the IR stream |
 | Compute | CPU only | AMD iGPU via ONNX Runtime (ROCm/MIGraphX) or OpenCV DNN (Vulkan) |
+
+Code layout:
+
+* `onnx_face.py` — the pipeline library: `InferenceEngine`, `SCRFD`,
+  `ArcFace`, `DeepPAD`, `LivenessAnalyzer`, and `FacePipeline` with
+  `verify_user()` / `enroll_user()` for in-process callers
+* `compare_onnx.py` — CLI mirroring `compare.py`'s contract (argv[1] = user,
+  exit code = status), also used for enrollment and live testing
+* `verification.py` — `OnnxBoundVerifier` runs the pipeline in-process for
+  the webauthn daemon; `create_verifier()` selects it via `[onnx] enabled`
+* `train_liveness_onnx.py` — trains the IR liveness SVM from your captures
 
 ## Setup
 
@@ -67,28 +78,36 @@ verification pipeline intended to replace the dlib stack in `compare.py`:
 ## Usage
 
 ```sh
-python3 compare_onnx_prototype.py <user> --enroll   # look at the IR camera, stores 512-D vector
-python3 compare_onnx_prototype.py <user>            # authenticate (exit code 0 on success)
-python3 compare_onnx_prototype.py <user> --test     # live similarity/liveness readout
+python3 compare_onnx.py <user> --enroll   # look at the IR camera, stores 512-D vector
+python3 compare_onnx.py <user>            # authenticate (exit code 0 on success)
+python3 compare_onnx.py <user> --test     # live similarity/liveness readout
 ```
 
-The IR camera defaults to `/dev/video2` (8-bit `GREY`, 640x360); override with
-`--device` or `HOWDY_IR_DEVICE`.
+The camera comes from `[video] device_path` in Howdy's `config.ini`
+(fallback `/dev/video2`, 8-bit `GREY`, 640x360); override with `--device` or
+`HOWDY_IR_DEVICE`. Thresholds come from the `[onnx]` config section, CLI
+flags override.
 
-Exit codes follow `compare.py` (0 ok, 10 no model, 11 timeout/no match,
-12 no username, 13 all frames dark) plus **14 = presentation attack suspected**
-(the face matched but liveness rejected it) so the PAM layer can message this
-distinctly.
+Exit codes follow `compare.py` / `VerificationResult` (0 ok, 10 no model,
+11 timeout/no match, 12 abort, 13 all frames dark) plus
+**16 = PRESENTATION_ATTACK** (the face matched but liveness rejected it);
+14 and 15 were already taken by INVALID_DEVICE and RUBBERSTAMP.
+
+Enrollments are versioned multi-model JSON like the dlib store, saved in
+`<user_models_dir>/onnx/<user>.dat` on an installed system and
+`onnx-data/enroll_<user>.json` in a development checkout.
 
 ## Presentation attack detection
 
 There is no `Z16` depth stream on Linux, so liveness is derived from the 2D IR
-stream with two independent signals that must both pass:
+stream with two independent signals that must both pass. The texture signal is
+selected by `[onnx] pad_engine`:
 
-* **LBP micro-texture** — uniform LBP(8,1) histogram of the aligned IR crop.
-  Skin under active IR illumination exhibits subsurface scattering with a broad
-  texture spectrum; paper is flat, and phone/laptop screens emit almost no IR
-  (they appear black to the IR camera). Train the proper classifier with:
+* **LBP micro-texture SVM** (`auto`, the default) — uniform LBP(8,1) histogram
+  of the aligned IR crop. Skin under active IR illumination exhibits
+  subsurface scattering with a broad texture spectrum; paper is flat, and
+  phone/laptop screens emit almost no IR (they appear black to the IR camera).
+  Train it on your own sensor with:
 
   ```sh
   python3 train_liveness_onnx.py --capture onnx-data/pad/real  --seconds 30   # your face
@@ -96,9 +115,18 @@ stream with two independent signals that must both pass:
   python3 train_liveness_onnx.py --real onnx-data/pad/real --spoof onnx-data/pad/spoof
   ```
 
-  This writes `onnx-data/liveness_svm.xml`, which the prototype loads
-  automatically. Until then a conservative entropy/sharpness heuristic is used
-  (a warning is printed).
+  This writes `onnx-data/liveness_svm.xml`, which is picked up automatically.
+  Until then a conservative entropy/sharpness heuristic is used (a warning is
+  printed). Capture several sessions per class under varied lighting or the
+  reported held-out accuracy will be optimistic.
+
+* **Anti-spoofing CNN** (`pad_engine = cnn`, RGB cameras only) — a MiniFASNet
+  binary classifier (Silent-Face family, trained on CelebA-Spoof). **Measured
+  on this hardware: it does not transfer to active-IR imagery** — it scored
+  real IR faces P(live) ≈ 0.05 and spoofed IR captures ≈ 0.01, i.e. everything
+  looks spoofed and no threshold separates the classes. It is therefore never
+  auto-selected; enable it only for RGB webcams. Training a MiniFASNet on IR
+  data is the natural future upgrade for IR rigs.
 
 * **Landmark parallax** — the 5 landmarks are tracked across frames; a rigid
   similarity transform is fitted to the outer four points (eyes + mouth) and
@@ -111,14 +139,17 @@ stream with two independent signals that must both pass:
 on `LivenessAnalyzer` and are deliberately conservative defaults — tune them
 with `--test` against your own spoof media before trusting them.
 
-## Integration plan (WebAuthn daemon)
+## WebAuthn daemon integration
 
 The consumer of this pipeline is `howdy-webauthn`, the virtual FIDO2
-authenticator: face verification gates passkey assertions. The prototype
-mirrors `compare.py`'s contract (argv[1] = username, exit-code protocol), so
-the internal verification API can shell out to it — or import it — the same
-way it drives `compare.py`, mapping exit code 14 to a distinct
-"presentation attack suspected" UV failure.
+authenticator: face verification gates passkey assertions. With
+`[onnx] enabled = true`, `create_verifier()` gives the daemon an
+`OnnxBoundVerifier` that runs the pipeline **in-process**: models are loaded
+once (in a background thread at service start) and stay resident, so an
+assertion costs only camera open + a few frames (~1.1s measured warm).
+CTAPHID CANCEL is honored between frames. If the ONNX dependencies are
+missing the daemon falls back to the classic `compare.py` subprocess and
+logs why — enabling the option can never brick passkey auth.
 
 ### Running the pipeline on the GPU inside the daemon
 
@@ -145,11 +176,14 @@ misconfigured GPU degrades speed, never availability.
 
 ### Remaining work
 
-* store enrollments in `paths_factory.user_model_path()` format (versioned,
-  multiple models per user) instead of `onnx-data/enroll_<user>.json`
-* read thresholds/device from Howdy's `config.ini` (`[webauthn]`) instead of
-  CLI flags
-* call the verification routine in-process from the daemon so the models
-  stay loaded between assertions (~0.3s saved per authentication)
 * package the ONNX weights via `onnx-data/install.sh` the same way
-  `dlib-data/install.sh` is handled by the meson build
+  `dlib-data/install.sh` is handled by the meson build, and install
+  `onnx_face.py`/`compare_onnx.py` with the rest of the sources
+* adopt `recorders.video_capture.VideoCapture` so exotic camera setups
+  (`[video] recording_plugin`, exposure, rotation) work identically to
+  `compare.py`
+* GPU inside the daemon needs the ONNX runtime importable by the daemon's
+  interpreter: either a system-wide install or pointing the service's
+  ExecStart at the venv python (plus the systemd drop-in above)
+* an IR-trained MiniFASNet to replace the LBP SVM as the default texture
+  engine
