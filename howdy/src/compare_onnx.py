@@ -39,7 +39,11 @@ def main():
 		settings.pad = False
 
 	start = time.time()
-	pipeline = onnx_face.FacePipeline(settings)
+	try:
+		pipeline = onnx_face.FacePipeline(settings)
+	except RuntimeError as err:
+		print(err)
+		sys.exit(1)
 	print("Backends: %s (loaded in %.2fs)" % (pipeline.backends(), time.time() - start))
 	if settings.pad:
 		print("PAD texture engine: " + pipeline.make_liveness().texture_mode())

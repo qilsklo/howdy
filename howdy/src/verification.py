@@ -133,7 +133,13 @@ class OnnxBoundVerifier:
 		self._lock = threading.Lock()
 		self._cancel = threading.Event()
 		if preload:
-			threading.Thread(target=self._get_pipeline, daemon=True).start()
+			threading.Thread(target=self._preload, daemon=True).start()
+
+	def _preload(self):
+		try:
+			self._get_pipeline()
+		except Exception as err:
+			print("ONNX pipeline preload failed: %s" % err)
 
 	def _get_pipeline(self):
 		with self._lock:
@@ -150,7 +156,8 @@ class OnnxBoundVerifier:
 			pipeline = self._get_pipeline()
 			status = pipeline.verify_user(
 				self.user, timeout=timeout, cancel_check=self._cancel.is_set)
-		except Exception:
+		except Exception as err:
+			print("ONNX verification failed: %s" % err)
 			return VerificationResult.UNKNOWN_ERROR
 		if self._cancel.is_set():
 			return VerificationResult.CANCELLED

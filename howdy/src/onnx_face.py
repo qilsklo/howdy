@@ -640,14 +640,17 @@ class FacePipeline:
 
 
 def find_model(*patterns):
-	"""Locate an ONNX file in DATA_DIR matching any of the given prefixes"""
+	"""Locate an ONNX file in DATA_DIR matching any of the given prefixes.
+
+	Raises RuntimeError rather than exiting: in-process callers (the webauthn
+	daemon) must translate this into a verification failure, not die.
+	"""
 	if os.path.isdir(DATA_DIR):
 		for name in sorted(os.listdir(DATA_DIR)):
 			if name.endswith(".onnx") and any(name.startswith(p) for p in patterns):
 				return os.path.join(DATA_DIR, name)
-	print("Missing ONNX weights in " + DATA_DIR)
-	print("Run: " + os.path.join(DATA_DIR, "install.sh"))
-	sys.exit(1)
+	raise RuntimeError(
+		"Missing ONNX weights in %s, run %s" % (DATA_DIR, os.path.join(DATA_DIR, "install.sh")))
 
 
 def open_camera(settings):

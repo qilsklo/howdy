@@ -30,8 +30,11 @@ py_sources = [
     'cli/webauthn.py',
     'cli.py',
     'compare.py',
+    'compare_onnx.py',
     'i18n.py',
+    'onnx_face.py',
     'paths_factory.py',
+    'train_liveness_onnx.py',
     'recorders/__init__.py',
     'recorders/ffmpeg_reader.py',
     'recorders/pyv4l2_reader.py',
@@ -118,6 +121,19 @@ if not fs.exists(config_path)
 endif
 
 install_data('dlib-data/install.sh', 'dlib-data/Readme.md', install_dir: dlibdatadir, install_mode: 'rwxr--r--')
+
+# ONNX pipeline data directory: onnx_face.py resolves its weights relative to
+# its own location, so the helpers live next to the installed sources. The
+# weights themselves are fetched post-install by install.sh (or the deploy
+# script), like the dlib data.
+install_data(
+    'onnx-data/install.sh',
+    'onnx-data/fix-execstack.py',
+    'onnx-data/deploy-webauthn-onnx.sh',
+    install_dir: pysourcesinstalldir / 'onnx-data',
+    install_mode: 'rwxr-xr-x',
+    install_tag: 'py_sources',
+)
 
 install_man('../howdy.1')
 
